@@ -133,10 +133,12 @@ Since C cannot be inferred from the argument the function receives, the implemen
         }
 ```
 
+Note that because of this [issue](https://github.com/rust-lang/rust/issues/83701), any function with impl trait usage currently will not work with this macro due the presence of the turbofish in the invoke function definitions. 
+
 ## Current status
 
 As it stands, the only invoke function that the enum adds is the invoke_all function and the two associated consts. Currently, the invoke_all function inherits its visibility from the signature of the first method/function in the impl block. It now works for actual methods that take &self or &mut self as a parameter (how or even if methods that take self as a parameter should be handled is a different matter). Additionally, the error output is for the most part garbage as I've focused on trying to get a working macro for most cases as the expense of decent error messages; what error messages do arise will be through panics.
 
 ## Future improvements planned
 
-I plan to extend this macro to add the ability for user-input in the macro to specify different names for the functions created, to generate multiple such functions for specified function signatures, etc. I also intend to implement enumerated and named versions of invoke_all, so that the closure can more easily know which function/method it is evaluating a return value from; as well as invoke functions/methods that only invoke lists of specified (by index in the associated const array or by functio/method identifier) functions. All coming soon enough, hopefully!
+I plan to extend this macro to add the ability for user-input in the macro to specify different names for the functions created, to generate multiple such functions for specified function signatures, etc. I also intend to implement enumerated and named versions of invoke_all, so that the closure can more easily know which function/method it is evaluating a return value from; as well as invoke functions/methods that only invoke lists of specified (by index in the associated const array or by functio/method identifier) functions. Lastly, I intend to write case-handling to deal with impl Trait parameters and return types. All coming soon enough, hopefully!
