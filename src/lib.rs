@@ -1,11 +1,11 @@
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
+use syn::FnArg::Typed;
 use syn::__private::Default;
 use syn::__private::Span;
-use syn::FnArg::Typed;
 use syn::{
-    parse_macro_input, Block, Expr, ExprCall, FnArg, Ident, ImplItem,
-    ImplItemMethod, ItemImpl, Pat, ReturnType, Signature, Stmt, Type
+    parse_macro_input, Block, Expr, ExprCall, FnArg, Ident, ImplItem, ImplItemMethod, ItemImpl,
+    Pat, ReturnType, Signature, Stmt, Type,
 };
 
 /// Macro which does the following: adds a function (invoke_all) which forwards all but the last
@@ -80,13 +80,22 @@ fn create_invoke_all(
         ..base_method.sig.clone()
     };
 
+    let mut is_method = false;
+
     // Grab parameter identifiers to invoke_all before appending consumer closure parameter
     let param_ids = invoke_sig
         .inputs
         .iter()
         .cloned()
         .filter_map(|fnarg| match fnarg {
-            FnArg::Receiver(_) => None,
+            FnArg::Receiver(receiver) => {
+                if receiver.reference.is_some() {
+                    is_method = true;
+                } else {
+                    panic!("invoke_impl cannot be used with methods taking self as move!");
+                }
+                None
+            }
             Typed(pattype) => Some(pattype),
         })
         .filter_map(|pat| match *pat.pat {
@@ -102,14 +111,17 @@ fn create_invoke_all(
     let trailing_empty_return_type: ReturnType = syn::parse(quote!(-> ()).into()).unwrap();
     if output_type != trailing_empty_return_type && output_type != ReturnType::Default {
         // Use method return type to create an impl trait definition for consumer closures
-        invoke_sig.inputs.push({
-            if let ReturnType::Type(_, bx) = output_type.clone() {
-                let bxtype = *bx;
-                Ok(syn::parse(quote!(mut #closure_ident: impl FnMut(#bxtype)).into()).unwrap())
-            } else {
-                Err("Shouldn't detect an empty return after the if statement!")
+        invoke_sig.inputs.push(
+            {
+                if let ReturnType::Type(_, bx) = output_type.clone() {
+                    let bxtype = *bx;
+                    Ok(syn::parse(quote!(mut #closure_ident: impl FnMut(#bxtype)).into()).unwrap())
+                } else {
+                    Err("Shouldn't detect an empty return after the if statement!")
+                }
             }
-        }.unwrap());
+            .unwrap(),
+        );
     }
 
     // By this point, supposing the methods have signatures like pub fn name<T: Trait>(arg: T) -> r
@@ -126,8 +138,16 @@ fn create_invoke_all(
     for &method in methods {
         // Call function with forwarded parameters
         let method_name = method.sig.ident.clone();
-        let inner_call: ExprCall =
-            syn::parse(quote!(#struct_ident::#method_name::<>(#(#param_ids),*)).into()).unwrap();
+        let inner_call: Expr = if is_method {
+            Expr::MethodCall(
+                syn::parse(quote!(self.#method_name::<>(#(#param_ids),*)).into()).unwrap()
+            )
+        } else {
+            Expr::Call(
+                syn::parse(quote!(#struct_ident::#method_name::<>(#(#param_ids),*)).into())
+                    .unwrap(),
+            )
+        };
 
         if output_type != trailing_empty_return_type && output_type != ReturnType::Default {
             // Functions have return type, so the invoke_all function accepts a closure
@@ -143,7 +163,7 @@ fn create_invoke_all(
         } else {
             invoke_block
                 .stmts
-                .push(Stmt::Semi(Expr::Call(inner_call), Default::default()));
+                .push(Stmt::Semi(inner_call, Default::default()));
         }
     }
 

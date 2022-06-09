@@ -39,7 +39,7 @@ As it currently works, when the #[invoke_all] attribute proc macro is applied to
         pub fn fn3() -> i32 {
             3
         }
-        fn invoke_all(mut consumer: impl FnMut(i32)) {
+        pub fn invoke_all(mut consumer: impl FnMut(i32)) {
             consumer(Tester1::fn1());
             consumer(Tester1::fn2());
             consumer(Tester1::fn3());
@@ -53,7 +53,7 @@ As is demonstrated, invoke functions added to impl blocks process the output of 
 
 ## Use cases
 
-The main use case for this crate is obvious: when a user wishes to invoke a large number of functions with identical signatures, typically to do something with the results. This approach with procedural macros has several advantages over alternative ways to address this problem. To begin with, one way to perform a similar behavior is to store a Vec of function pointers, or perhaps of boxed closures. However, both of these approaches would require manually adding the items to the Vec, or using another procedural macro. Furthermore, both techniques do not permit storing of generic functions without specifically instantiating an instance with concrete types, which contributes increasing the code the developer is responsible for maintaining in the event that we have functions that are generic. 
+The main use case for this crate is obvious: when a user wishes to invoke a large number of functions with identical signatures, typically to do something with the results. This approach with procedural macros has several advantages over alternative ways to address this problem. To begin with, one way to perform a similar behavior is to store a Vec of function pointers, or perhaps of boxed closures. However, both of these approaches would require manually adding the items to the Vec, or using another procedural macro. Furthermore, both techniques do not permit storing of generic functions without specifically instantiating an instance with concrete types, which contributes to increasing the code the developer is responsible for maintaining. 
 
 In contrast, when using this approach, functions are automatically added to invoke functions and associated consts when implemented in the impl block. Furthermore, if the functions in the impl block are generic, so to will be the invoke functions generated:
 
@@ -90,7 +90,7 @@ becomes
         pub fn fn3<T: Add + Copy>(i: T, j: T) -> <T as Add>::Output {
             i + j
         }
-        fn invoke_all<T: Add + Copy>(i: T, j: T, mut consumer: impl FnMut(<T as Add>::Output)) {
+        pub fn invoke_all<T: Add + Copy>(i: T, j: T, mut consumer: impl FnMut(<T as Add>::Output)) {
             consumer(Tester4::fn1(i, j));
             consumer(Tester4::fn2(i, j));
             consumer(Tester4::fn3(i, j));
@@ -104,8 +104,8 @@ Altogether, this approach seems to be much more easily maintained (when things g
 
 ## Current status
 
-As it stands, the only invoke function that the enum adds is the invoke_all function and the two associated consts. It doesn't work yet for actual methods that take self as a parameter. Additionally, the error output is for the most part garbage as I've focused on trying to get a working macro for most cases as the expense of decent error messages. 
+As it stands, the only invoke function that the enum adds is the invoke_all function and the two associated consts. Currently, the invoke_all function inherits its visibility from the signature of the first method/function in the impl block. It now works for actual methods that take &self or &mut self as a parameter (how or even if methods that take self as a parameter should be handled is a different matter). Additionally, the error output is for the most part garbage as I've focused on trying to get a working macro for most cases as the expense of decent error messages; what error messages do arise will be through panics.
 
 ## Future improvements planned
 
-I plan to extend this macro to work for methods that take &self or &mut self, as well as possibly add the ability for user-input in the macro to specify different names for the functions created, to generate multiple such functions for specified function signatures, etc. I also intend to implement enumerated and named versions of invoke_all, so that the closure can more easily know which function/method it is evaluating a return value from; as well as invoke functions/methods that only invoke lists of specified (by index in the associated const array or by functio/method identifier) functions. Also, I need to make sure the invoke functions have the same visibility as the functions they're invoking. All coming soon enough, hopefully!
+I plan to extend this macro to add the ability for user-input in the macro to specify different names for the functions created, to generate multiple such functions for specified function signatures, etc. I also intend to implement enumerated and named versions of invoke_all, so that the closure can more easily know which function/method it is evaluating a return value from; as well as invoke functions/methods that only invoke lists of specified (by index in the associated const array or by functio/method identifier) functions. All coming soon enough, hopefully!
