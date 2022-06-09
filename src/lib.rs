@@ -3,10 +3,7 @@ use quote::{quote, ToTokens};
 use syn::FnArg::Typed;
 use syn::__private::Default;
 use syn::__private::Span;
-use syn::{
-    parse_macro_input, Block, Expr, ExprCall, FnArg, Ident, ImplItem, ImplItemMethod, ItemImpl,
-    Pat, ReturnType, Signature, Stmt, Type,
-};
+use syn::{parse_macro_input, Block, Expr, ExprCall, FnArg, Ident, ImplItem, ImplItemMethod, ItemImpl, Pat, ReturnType, Signature, Stmt, Type, GenericParam};
 
 /// Macro which does the following: adds a function (invoke_all) which forwards all but the last
 /// argument to every function matching the signature in the impl block, and consumes their results
@@ -104,6 +101,18 @@ fn create_invoke_all(
         })
         .collect::<Vec<_>>();
 
+    // Get generic parameters
+    let generic_params = invoke_sig
+        .generics
+        .params
+        .iter()
+        .cloned()
+        .filter_map(|gp| match gp {
+            GenericParam::Type(tp) => {Some(tp.ident)}
+            _ => {None}
+        })
+        .collect::<Vec<_>>();
+
     // Specify name of closure parameter, if one will be provided:
     let closure_ident = Ident::new("consumer", Span::call_site());
 
@@ -140,11 +149,11 @@ fn create_invoke_all(
         let method_name = method.sig.ident.clone();
         let inner_call: Expr = if is_method {
             Expr::MethodCall(
-                syn::parse(quote!(self.#method_name::<>(#(#param_ids),*)).into()).unwrap()
+                syn::parse(quote!(self.#method_name::<#(#generic_params),*>(#(#param_ids),*)).into()).unwrap()
             )
         } else {
             Expr::Call(
-                syn::parse(quote!(#struct_ident::#method_name::<>(#(#param_ids),*)).into())
+                syn::parse(quote!(#struct_ident::#method_name::<#(#generic_params),*>(#(#param_ids),*)).into())
                     .unwrap(),
             )
         };

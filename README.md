@@ -91,16 +91,47 @@ becomes
             i + j
         }
         pub fn invoke_all<T: Add + Copy>(i: T, j: T, mut consumer: impl FnMut(<T as Add>::Output)) {
-            consumer(Tester4::fn1(i, j));
-            consumer(Tester4::fn2(i, j));
-            consumer(Tester4::fn3(i, j));
+            consumer(Tester4::fn1::<T>(i, j));
+            consumer(Tester4::fn2::<T>(i, j));
+            consumer(Tester4::fn3::<T>(i, j));
         }
         pub const METHOD_COUNT: usize = 3usize;
         pub const METHOD_LIST: [&'static str; 3usize] = ["fn1", "fn2", "fn3"];
     }
 ```
 
-Altogether, this approach seems to be much more easily maintained (when things go well...)
+Altogether, this approach seems to be much more easily maintained (when things go well...).
+
+Note that when there are generic type parameters, the turbofish syntax is automatically applied. This is less important in examples like the one above where T is deducible by looking at the field passed to the function, but it is important in cases like the one below: 
+
+```Rust
+    struct Tester5;
+
+    #[invoke_all]
+    impl Tester5 {
+        pub fn fn1<C: FromIterator<usize>>(i: &Vec<usize>) -> C {
+            i.iter().copied().collect::<C>()
+        }
+
+        pub fn fn2<C: FromIterator<usize>>(i: &Vec<usize>) -> C {
+            i.iter().copied().collect::<C>()
+        }
+
+        pub fn fn3<C: FromIterator<usize>>(i: &Vec<usize>) -> C {
+            i.iter().copied().collect::<C>()
+        }
+    }
+```
+
+Since C cannot be inferred from the argument the function receives, the implementation of invoke_all must (and does) use the turbofish to specify the type of C for each call:
+
+```Rust
+        pub fn invoke_all<C: FromIterator<usize>>(i: &Vec<usize>, mut consumer: impl FnMut(C)) {
+            consumer(Tester5::fn1::<C>(i));
+            consumer(Tester5::fn2::<C>(i));
+            consumer(Tester5::fn3::<C>(i));
+        }
+```
 
 ## Current status
 
