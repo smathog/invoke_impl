@@ -8,9 +8,8 @@ use syn::{
     parse_macro_input, token, Block, Expr, ExprCall, ExprPath, FnArg, Ident, ImplItem,
     ImplItemMethod, ItemImpl, ParenthesizedGenericArguments, Pat, PatIdent, PatType, Path,
     PathArguments, PathSegment, ReturnType, Signature, Stmt, TraitBound, TraitBoundModifier, Type,
-    TypeImplTrait, TypeParamBound, Visibility,
+    TypeImplTrait, TypeParamBound
 };
-
 
 /// Macro which does the following: adds a function (invoke_all) which forwards all but the last
 /// argument to every function matching the signature in the impl block, and consumes their results
@@ -42,28 +41,19 @@ pub fn invoke_all(_: TokenStream, item: TokenStream) -> TokenStream {
         .collect::<Vec<_>>();
 
     // Add invoke_all function to impl block:
-    let invoke_all = create_invoke_all(&methods, get_struct_identifier_as_path(&input));
+    let invoke_all = create_invoke_all(methods[0], &methods, get_struct_identifier_as_path(&input));
     input.items.push(invoke_all);
 
     // Append the number of functions (excluding those added by macro) to the impl block:
     input
         .items
-        .push(
-            syn::parse(
-            quote!(pub const METHOD_COUNT: usize = #count;)
-                .into())
-                .unwrap()
-        );
+        .push(syn::parse(quote!(pub const METHOD_COUNT: usize = #count;).into()).unwrap());
 
     // Append an array containing all function identifiers into the tokenstream
-    input
-        .items
-        .push(
-            syn::parse(
-                quote!(pub const METHOD_LIST: [&'static str; #count] = [#(#names),*];)
-                    .into())
-                .unwrap()
-        );
+    input.items.push(
+        syn::parse(quote!(pub const METHOD_LIST: [&'static str; #count] = [#(#names),*];).into())
+            .unwrap(),
+    );
 
     input.into_token_stream().into()
 }
@@ -72,9 +62,13 @@ pub fn invoke_all(_: TokenStream, item: TokenStream) -> TokenStream {
 /// annotated block must share the same signature). Note that rather than returning, the
 /// invoke_all function will share the same parameter signature as the impl block functions but
 /// also has a "consumer" FnMut(Original Return Type) -> () parameter added.
-fn create_invoke_all(names: &Vec<&ImplItemMethod>, struct_path: PathSegment) -> ImplItem {
+fn create_invoke_all(
+    base_method: &ImplItemMethod,
+    methods: &Vec<&ImplItemMethod>,
+    struct_path: PathSegment,
+) -> ImplItem {
     // Get output type:
-    let output_type = names[0].sig.output.clone();
+    let output_type = base_method.sig.output.clone();
 
     // Set up the signature for the invoke_all function.
     let mut invoke_sig = Signature {
@@ -82,7 +76,7 @@ fn create_invoke_all(names: &Vec<&ImplItemMethod>, struct_path: PathSegment) -> 
         ident: Ident::new("invoke_all", Span::call_site()),
         // Set return type to ()
         output: ReturnType::Default,
-        ..names[0].sig.clone()
+        ..base_method.sig.clone()
     };
 
     // Grab parameter identifiers to invoke_all before appending consumer closure parameter
@@ -106,58 +100,60 @@ fn create_invoke_all(names: &Vec<&ImplItemMethod>, struct_path: PathSegment) -> 
     // If return type is (), don't bother adding closure; otherwise do so
     let trailing_empty_return_type: ReturnType = syn::parse(quote!(-> ()).into()).unwrap();
     if output_type != trailing_empty_return_type && output_type != ReturnType::Default {
-            // Use method return type to create an impl trait definition for consumer closures
-            invoke_sig.inputs.push(Typed(PatType {
+        // Use method return type to create an impl trait definition for consumer closures
+        invoke_sig.inputs.push(Typed(PatType {
+            attrs: vec![],
+            pat: Box::new(Pat::Ident(PatIdent {
                 attrs: vec![],
-                pat: Box::new(Pat::Ident(PatIdent {
-                    attrs: vec![],
-                    by_ref: None,
-                    mutability: Some(token::Mut {
-                        span: Span::call_site(),
-                    }),
-                    // Parameter name to consumer
-                    ident: Ident::new(closure_name, Span::call_site()),
-                    subpat: None,
-                })),
-                colon_token: Default::default(),
-                // Set parameter type to impl FnMut(IMPL FUNCTIONS RETURN TYPE) -> ()
-                ty: Box::new(Type::ImplTrait(TypeImplTrait {
-                    impl_token: Default::default(),
-                    bounds: {
-                        let mut bounds: Punctuated<_, _> = Punctuated::new();
-                        bounds.push(TypeParamBound::Trait(TraitBound {
-                            paren_token: None,
-                            modifier: TraitBoundModifier::None,
-                            lifetimes: None,
-                            path: Path {
-                                leading_colon: None,
-                                segments: {
-                                    let mut segments: Punctuated<_, _> = Punctuated::new();
-                                    segments.push(PathSegment {
-                                        ident: Ident::new("FnMut", Span::call_site()),
-                                        arguments: PathArguments::Parenthesized(
-                                            ParenthesizedGenericArguments {
-                                                paren_token: Default::default(),
-                                                inputs: {
-                                                    let mut inputs: Punctuated<_, _> = Punctuated::new();
-                                                    // If the methods return anything, FnMut should take it as sole argument
-                                                    if let ReturnType::Type(_, bx) = output_type.clone() {
-                                                        inputs.push(*bx);
-                                                    }
-                                                    inputs
-                                                },
-                                                output: ReturnType::Default,
+                by_ref: None,
+                mutability: Some(token::Mut {
+                    span: Span::call_site(),
+                }),
+                // Parameter name to consumer
+                ident: Ident::new(closure_name, Span::call_site()),
+                subpat: None,
+            })),
+            colon_token: Default::default(),
+            // Set parameter type to impl FnMut(IMPL FUNCTIONS RETURN TYPE) -> ()
+            ty: Box::new(Type::ImplTrait(TypeImplTrait {
+                impl_token: Default::default(),
+                bounds: {
+                    let mut bounds: Punctuated<_, _> = Punctuated::new();
+                    bounds.push(TypeParamBound::Trait(TraitBound {
+                        paren_token: None,
+                        modifier: TraitBoundModifier::None,
+                        lifetimes: None,
+                        path: Path {
+                            leading_colon: None,
+                            segments: {
+                                let mut segments: Punctuated<_, _> = Punctuated::new();
+                                segments.push(PathSegment {
+                                    ident: Ident::new("FnMut", Span::call_site()),
+                                    arguments: PathArguments::Parenthesized(
+                                        ParenthesizedGenericArguments {
+                                            paren_token: Default::default(),
+                                            inputs: {
+                                                let mut inputs: Punctuated<_, _> =
+                                                    Punctuated::new();
+                                                // If the methods return anything, FnMut should take it as sole argument
+                                                if let ReturnType::Type(_, bx) = output_type.clone()
+                                                {
+                                                    inputs.push(*bx);
+                                                }
+                                                inputs
                                             },
-                                        ),
-                                    });
-                                    segments
-                                },
+                                            output: ReturnType::Default,
+                                        },
+                                    ),
+                                });
+                                segments
                             },
-                        }));
-                        bounds
-                    },
-                })),
-            }));
+                        },
+                    }));
+                    bounds
+                },
+            })),
+        }));
     }
 
     // By this point, supposing the methods have signatures like pub fn name<T: Trait>(arg: T) -> r
@@ -171,7 +167,7 @@ fn create_invoke_all(names: &Vec<&ImplItemMethod>, struct_path: PathSegment) -> 
     };
 
     // Iterating over names, call consumer to consume a call of a given function:
-    for &name in names {
+    for &method in methods {
         // Call function with forwarded parameters
         let inner_call = ExprCall {
             attrs: vec![],
@@ -187,7 +183,7 @@ fn create_invoke_all(names: &Vec<&ImplItemMethod>, struct_path: PathSegment) -> 
                         function_path.push(struct_path.clone());
                         // Add name of function to path
                         function_path.push(PathSegment {
-                            ident: name.sig.ident.clone(),
+                            ident: method.sig.ident.clone(),
                             arguments: PathArguments::None,
                         });
                         function_path
@@ -220,37 +216,37 @@ fn create_invoke_all(names: &Vec<&ImplItemMethod>, struct_path: PathSegment) -> 
         };
 
         if output_type != trailing_empty_return_type && output_type != ReturnType::Default {
-                // Functions have return type, so the invoke_all function accepts a closure
-                // Insert previous call into a call of consumer:
-                let outer_call = ExprCall {
+            // Functions have return type, so the invoke_all function accepts a closure
+            // Insert previous call into a call of consumer:
+            let outer_call = ExprCall {
+                attrs: vec![],
+                func: Box::new(Expr::Path(ExprPath {
                     attrs: vec![],
-                    func: Box::new(Expr::Path(ExprPath {
-                        attrs: vec![],
-                        qself: None,
-                        path: Path {
-                            leading_colon: None,
-                            segments: {
-                                let mut function_path: Punctuated<_, _> = Punctuated::new();
-                                function_path.push(PathSegment {
-                                    ident: Ident::new(closure_name, Span::call_site()),
-                                    arguments: PathArguments::None,
-                                });
-                                function_path
-                            },
+                    qself: None,
+                    path: Path {
+                        leading_colon: None,
+                        segments: {
+                            let mut function_path: Punctuated<_, _> = Punctuated::new();
+                            function_path.push(PathSegment {
+                                ident: Ident::new(closure_name, Span::call_site()),
+                                arguments: PathArguments::None,
+                            });
+                            function_path
                         },
-                    })),
-                    paren_token: Default::default(),
-                    args: {
-                        let mut args: Punctuated<_, _> = Punctuated::new();
-                        args.push(Expr::Call(inner_call));
-                        args
                     },
-                };
+                })),
+                paren_token: Default::default(),
+                args: {
+                    let mut args: Punctuated<_, _> = Punctuated::new();
+                    args.push(Expr::Call(inner_call));
+                    args
+                },
+            };
 
-                // Insert combined call into statements
-                invoke_block
-                    .stmts
-                    .push(Stmt::Semi(Expr::Call(outer_call), Default::default()));
+            // Insert combined call into statements
+            invoke_block
+                .stmts
+                .push(Stmt::Semi(Expr::Call(outer_call), Default::default()));
         } else {
             invoke_block
                 .stmts
@@ -260,11 +256,9 @@ fn create_invoke_all(names: &Vec<&ImplItemMethod>, struct_path: PathSegment) -> 
 
     // Combine invoke_sig and invoke_block into an actual combined function
     ImplItem::Method(ImplItemMethod {
-        attrs: vec![],
-        vis: Visibility::Inherited,
-        defaultness: None,
         sig: invoke_sig,
         block: invoke_block,
+        ..base_method.clone()
     })
 }
 
