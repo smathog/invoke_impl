@@ -1,9 +1,16 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::FnArg::Typed;
-use syn::__private::{Default, str};
 use syn::__private::Span;
-use syn::{parse_macro_input, Block, Expr, ExprCall, FnArg, GenericParam, Ident, ImplItem, ImplItemMethod, ItemImpl, Pat, ReturnType, Signature, Stmt, Type, ItemEnum};
+use syn::__private::{str, Default};
+use syn::parse::Parser;
+use syn::punctuated::Punctuated;
+use syn::{
+    parse_macro_input, Block, Expr, ExprCall, FnArg, GenericParam, Ident, ImplItem, ImplItemMethod,
+    ItemEnum, ItemImpl, Lit, MetaList, NestedMeta, Pat, ReturnType, Signature, Stmt, Type,
+};
+
+use std::collections::HashSet;
 
 /// Macro which does the following: adds a function (invoke_all) which forwards all but the last
 /// argument to every function matching the signature in the impl block, and consumes their results
@@ -12,7 +19,7 @@ use syn::{parse_macro_input, Block, Expr, ExprCall, FnArg, GenericParam, Ident, 
 /// functions. Note that the order in which the functions appear in METHOD_LIST array is the same
 /// order in which they appear in the impl block.
 #[proc_macro_attribute]
-pub fn invoke_all(_: TokenStream, item: TokenStream) -> TokenStream {
+pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(item as ItemImpl);
 
     // Get a vec of references to ImplItemMethods in the impl block
@@ -43,12 +50,8 @@ pub fn invoke_all(_: TokenStream, item: TokenStream) -> TokenStream {
     let enum_tokenstream = create_enum(&methods, struct_ident.clone());
 
     // Add invoke_all function to impl block:
-    let invoke_all = create_invoke_all(
-        methods[0],
-        &methods,
-        struct_ident.clone(),
-        InvokeType::All
-    );
+    let invoke_all =
+        create_invoke_function(methods[0], &methods, struct_ident.clone(), InvokeType::All);
     input.items.push(invoke_all);
 
     // Append the number of functions (excluding those added by macro) to the impl block:
@@ -90,7 +93,7 @@ enum InvokeType {
 ///     FnMut(usize, Original Return Type)
 /// Additionally, an invoke function which is specified (meaning it takes a specified list of
 /// which functions to invoke) will further take a parameter of IntoIterator
-fn create_invoke_all(
+fn create_invoke_function(
     base_method: &ImplItemMethod,
     methods: &Vec<&ImplItemMethod>,
     struct_ident: Ident,
@@ -109,7 +112,7 @@ fn create_invoke_all(
             SpecificationType::Enumerated => "invoke_all_enumerated",
         },
         InvokeType::All => "invoke_all",
-        InvokeType::Subset => "invoke"
+        InvokeType::Subset => "invoke",
     };
 
     // Set up the signature for the invoke function being constructed.
@@ -252,7 +255,9 @@ fn create_invoke_all(
                         syn::parse(quote!(#closure_ident(#index, #inner_call)).into()).unwrap()
                     }
                 },
-                InvokeType::All | InvokeType::Subset => syn::parse(quote!(#closure_ident(#inner_call)).into()).unwrap(),
+                InvokeType::All | InvokeType::Subset => {
+                    syn::parse(quote!(#closure_ident(#inner_call)).into()).unwrap()
+                }
             };
 
             // Insert combined call into statements
@@ -276,7 +281,8 @@ fn create_invoke_all(
 
 /// Given a list of methods bound together by some invoke function, generate an enum to
 /// represent them. Namely, if methods = [fn1, fn2, fn3, ... fnm] and struct_ident = struct_name,
-/// then this will create an enum with members fn1, fn2, fn3, ... fnm
+/// then this will create an enum with members fn1, fn2, fn3, ... fnm. The created enum will
+/// implement Debug, Clone, Copy, and TryFrom<&str>. &str will implement From<enum_name>.
 fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: Ident) -> TokenStream {
     // Get list of identifiers from methods
     let identifiers = methods
@@ -297,10 +303,12 @@ fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: Ident) -> TokenStre
 
     let enum_declaration: ItemEnum = syn::parse(
         quote!(#[derive(Debug, Clone, Copy)]
-                pub enum #enum_name {
-                #(#identifiers),*
-            }).into()
-    ).unwrap();
+            pub enum #enum_name {
+            #(#identifiers),*
+        })
+        .into(),
+    )
+    .unwrap();
 
     let enum_impl: ItemImpl = syn::parse(
         quote!(impl #enum_name {
@@ -309,8 +317,10 @@ fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: Ident) -> TokenStre
                 static members: [#enum_name; #num_members] = [#(#identifiers),*];
                 members.iter()
             }
-        }).into()
-    ).unwrap();
+        })
+        .into(),
+    )
+    .unwrap();
 
     let try_from_str: ItemImpl = syn::parse(
         quote!(
@@ -323,8 +333,10 @@ fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: Ident) -> TokenStre
                     }
                 }
             }
-        ).into()
-    ).unwrap();
+        )
+        .into(),
+    )
+    .unwrap();
 
     let from_num: ItemImpl = syn::parse(
         quote!(
@@ -336,8 +348,10 @@ fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: Ident) -> TokenStre
                     }
                 }
             }
-        ).into()
-    ).unwrap();
+        )
+        .into(),
+    )
+    .unwrap();
 
     let mut enum_tokenstream: TokenStream = enum_declaration.into_token_stream().into();
     enum_tokenstream.extend::<TokenStream>(enum_impl.into_token_stream().into());
@@ -404,5 +418,88 @@ fn get_struct_identifier_as_path(input: &ItemImpl) -> Result<Ident, &str> {
         Ok(tp.path.segments[0].ident.clone())
     } else {
         Err("No struct name detected!")
+    }
+}
+
+/// Helper function to parse the args passed into the attribute. Currently, the format parsed will
+/// be akin to #[invoke_impl(name("some_string"); clone(2, 3))] where the name field denotes what
+/// name (if any) the user wants to give the invoke_functions and enum, and copy indicates which
+/// fields of the functions or methods being invoked need to be passed via cloning due to otherwise
+/// being moves.
+fn parse_args(args: TokenStream) -> (Option<String>, Option<HashSet<usize>>) {
+    let punctuated_args = Punctuated::<MetaList, syn::Token![;]>::parse_terminated
+        .parse(args)
+        .unwrap();
+    let mut result = (None, None);
+    if punctuated_args.is_empty() {
+        // No args, go with defaults
+        result
+    } else if punctuated_args.len() == 1 || punctuated_args.len() == 2 {
+        // Need to parse at least one argument!
+        for arg in punctuated_args {
+            match arg
+                .path
+                .get_ident()
+                .cloned()
+                .unwrap()
+                .to_string()
+                .to_lowercase()
+                .as_str()
+            {
+                "name" => {
+                    if result.0.is_some() {
+                        panic!("Argument name passed to invoke_impl twice!")
+                    }
+                    if arg.nested.len() != 1 {
+                        panic!("There can only be a single literal str argument to name!")
+                    } else {
+                        match &arg.nested[0] {
+                            NestedMeta::Meta(_) => {
+                                panic!("There can only be a single literal str argument to name!")
+                            }
+                            NestedMeta::Lit(lit) => {
+                                match lit {
+                                    Lit::Str(litstr) => result.0 = Some(litstr.value()),
+                                    _ => {
+                                        panic!("There can only be a single literal str argument to name!")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "clone" => {
+                    if result.1.is_some() {
+                        panic!("Argument clone passed to invoke_impl twice!")
+                    }
+                    let mut indices = HashSet::new();
+                    for nm in &arg.nested {
+                        match nm {
+                            NestedMeta::Meta(_) => {
+                                panic!("Arguments to clone must be literal ints!")
+                            }
+                            NestedMeta::Lit(lit) => match lit {
+                                Lit::Int(litint) => {
+                                    indices.insert(litint.base10_digits().parse::<usize>().unwrap());
+                                }
+                                _ => {
+                                    panic!("Arguments to clone must be literal ints!")
+                                }
+                            },
+                        }
+                    }
+                    result.1 = Some(indices);
+                }
+                _ => {
+                    panic!("The only valid arguments to invoke_impl are name and clone!")
+                }
+            }
+        }
+        result
+    } else {
+        panic!(
+            "invoke_impl currently only supports args name and clone in the format \
+        #[invoke-impl(name(\"name\"); clone(2, 3, 4)], and more than two args were passed in!"
+        );
     }
 }
