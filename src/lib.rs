@@ -13,14 +13,11 @@ use syn::{
 
 use std::collections::HashSet;
 
-/// Macro which does the following: adds a function (invoke_all) which forwards all but the last
-/// argument to every function matching the signature in the impl block, and consumes their results
-/// with the final parameter, a closure; adds an associated constant (METHOD_COUNT) of the number of
-/// available functions; adds an associated constant array (METHOD_LIST) of the names of available
-/// functions. Note that the order in which the functions appear in METHOD_LIST array is the same
-/// order in which they appear in the impl block.
+/// Proc macro which appends six different functions to a struct impl block that each represent
+/// different ways of invoking functions or methods implemented in that impl block, as well as
+/// two associated constants.
 #[proc_macro_attribute]
-pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
+pub fn invoke_impl(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(item as ItemImpl);
     let (name, clones) = parse_args(args);
 
