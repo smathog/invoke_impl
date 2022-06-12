@@ -1,3 +1,198 @@
+//! This crate revolves around the single attribute procedural macro invoke_impl, which when applied
+//! to a struct impl block where all the methods or associated functions share identical signatures
+//! will generate functions that help automate the calling process for invoking these functions.
+//!
+//! Six functions are generated: invoke_all, invoke_subset, invoke_all_enumerated, invoke_all_enum,
+//! invoke_enumerated, and invoke_enum. When the associated functions or methods of the impl block
+//! have a return type, these functions all take closure parameters that receive this return type.
+//! Additionally, the closures for invoke_all_enumerated and invoke_enumerated take a usize and
+//! the closures for invoke_all_enum and invoke_enum take an enum of the type of the macro generated
+//! enum, which can be used within the closure to determine specifically which function is being
+//! invoked at a given point in time.
+//!
+//! When there is no return type, invoke_all and invoke_subset do not take a closure, while
+//! invoke_all_enumerated and invoke_enumerated take a closure that takes usize and invoke_all_enum
+//! and invoke_enum take a closure that takes the type of the macro-generated enum.
+//!
+//! invoke_impl takes two arguments, name (expecting a string literal) and clone (expecting a list
+//! of int literals). Name specifiers an optional name to be appended to the identifiers of
+//! generated code, while clone indicates which 0-indexed parameters of the functions or methods
+//! in the impl block are to be cloned instead of directly forwarded.
+//!
+//! Additionally, invoke_impl adds two const fields to the impl block it is on: a list of &str
+//! copies of the identifiers of the invocable functions contained in the impl block, and a usize
+//! of the total count of invocable functions.
+//!
+//! For example:
+//!
+//!```
+//!    struct Tester1;
+//!
+//!    #[invoke_impl]
+//!     impl Tester1 {
+//!         pub fn fn1(i: i32) -> i32 {
+//!             i
+//!         }
+//!
+//!         pub fn fn2(i: i32) -> i32 {
+//!            i
+//!         }
+//!
+//!         pub fn fn3(i: i32) -> i32 {
+//!             i
+//!         }
+//!     }
+//!```
+//! is expanded into the following code:
+//!
+//! ```
+//!     struct Tester1;
+//!     impl Tester1 {
+//!       pub fn fn1(i: i32) -> i32 {
+//!           i
+//!       }
+//!       pub fn fn2(i: i32) -> i32 {
+//!           i
+//!       }
+//!       pub fn fn3(i: i32) -> i32 {
+//!           i
+//!       }
+//!       pub fn invoke_all(i: i32, mut consumer: impl FnMut(i32)) {
+//!           consumer(Tester1::fn1(i));
+//!           consumer(Tester1::fn2(i));
+//!           consumer(Tester1::fn3(i));
+//!       }
+//!       pub fn invoke_subset(
+//!           i: i32,
+//!           mut consumer: impl FnMut(i32),
+//!           mut invoke_impl_iter: impl Iterator<Item = usize>,
+//!       ) {
+//!           for invoke_impl_i in invoke_impl_iter {
+//!               match invoke_impl_i {
+//!                   0usize => consumer(Tester1::fn1(i)),
+//!                   1usize => consumer(Tester1::fn2(i)),
+//!                   2usize => consumer(Tester1::fn3(i)),
+//!                   _ => ::core::panicking::panic_fmt(::core::fmt::Arguments::new_v1(
+//!                       &["Iter contains invalid function index!"],
+//!                       &[],
+//!                   )),
+//!               }
+//!           }
+//!       }
+//!       pub fn invoke_all_enumerated(i: i32, mut consumer: impl FnMut(usize, i32)) {
+//!           consumer(0usize, Tester1::fn1(i));
+//!           consumer(1usize, Tester1::fn2(i));
+//!           consumer(2usize, Tester1::fn3(i));
+//!       }
+//!       pub fn invoke_all_enum(i: i32, mut consumer: impl FnMut(Tester1_invoke_impl_enum, i32)) {
+//!           consumer(Tester1_invoke_impl_enum::fn1, Tester1::fn1(i));
+//!           consumer(Tester1_invoke_impl_enum::fn2, Tester1::fn2(i));
+//!           consumer(Tester1_invoke_impl_enum::fn3, Tester1::fn3(i));
+//!       }
+//!       pub fn invoke_enumerated(
+//!           i: i32,
+//!           mut consumer: impl FnMut(usize, i32),
+//!           mut invoke_impl_iter: impl Iterator<Item = usize>,
+//!       ) {
+//!           for invoke_impl_i in invoke_impl_iter {
+//!               match invoke_impl_i {
+//!                   0usize => {
+//!                       consumer(0usize, Tester1::fn1(i));
+//!                   }
+//!                   1usize => {
+//!                       consumer(1usize, Tester1::fn2(i));
+//!                   }
+//!                   2usize => {
+//!                       consumer(2usize, Tester1::fn3(i));
+//!                   }
+//!                   _ => ::core::panicking::panic_fmt(::core::fmt::Arguments::new_v1(
+//!                       &["Iter contains invalid function index!"],
+//!                       &[],
+//!                   )),
+//!               }
+//!           }
+//!       }
+//!       pub fn invoke_enum(
+//!           i: i32,
+//!           mut consumer: impl FnMut(Tester1_invoke_impl_enum, i32),
+//!           mut invoke_impl_iter: impl Iterator<Item = Tester1_invoke_impl_enum>,
+//!       ) {
+//!           for invoke_impl_i in invoke_impl_iter {
+//!               match invoke_impl_i {
+//!                   Tester1_invoke_impl_enum::fn1 => {
+//!                       consumer(Tester1_invoke_impl_enum::fn1, Tester1::fn1(i));
+//!                   }
+//!                   Tester1_invoke_impl_enum::fn2 => {
+//!                       consumer(Tester1_invoke_impl_enum::fn2, Tester1::fn2(i));
+//!                   }
+//!                   Tester1_invoke_impl_enum::fn3 => {
+//!                       consumer(Tester1_invoke_impl_enum::fn3, Tester1::fn3(i));
+//!                   }
+//!               }
+//!           }
+//!       }
+//!       pub const METHOD_COUNT: usize = 3usize;
+//!       pub const METHOD_LIST: [&'static str; 3usize] = ["fn1", "fn2", "fn3"];
+//!   }
+//!   pub enum Tester1_invoke_impl_enum {
+//!       fn1,
+//!       fn2,
+//!       fn3,
+//!   }
+//!   #[automatically_derived]
+//!   #[allow(unused_qualifications)]
+//!   impl ::core::fmt::Debug for Tester1_invoke_impl_enum {
+//!       fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+//!           match (&*self,) {
+//!               (&Tester1_invoke_impl_enum::fn1,) => ::core::fmt::Formatter::write_str(f, "fn1"),
+//!               (&Tester1_invoke_impl_enum::fn2,) => ::core::fmt::Formatter::write_str(f, "fn2"),
+//!               (&Tester1_invoke_impl_enum::fn3,) => ::core::fmt::Formatter::write_str(f, "fn3"),
+//!           }
+//!       }
+//!   }
+//!   #[automatically_derived]
+//!   #[allow(unused_qualifications)]
+//!   impl ::core::clone::Clone for Tester1_invoke_impl_enum {
+//!       #[inline]
+//!       fn clone(&self) -> Tester1_invoke_impl_enum {
+//!           {
+//!               *self
+//!           }
+//!       }
+//!   }
+//!   #[automatically_derived]
+//!   #[allow(unused_qualifications)]
+//!   impl ::core::marker::Copy for Tester1_invoke_impl_enum {}
+//!   impl Tester1_invoke_impl_enum {
+//!       pub fn iter() -> impl Iterator<Item = &'static Tester1_invoke_impl_enum> {
+//!           use Tester1_invoke_impl_enum::*;
+//!           static members: [Tester1_invoke_impl_enum; 3usize] = [fn1, fn2, fn3];
+//!           members.iter()
+//!       }
+//!   }
+//!   impl TryFrom<&str> for Tester1_invoke_impl_enum {
+//!       type Error = &'static str;
+//!       fn try_from(value: &str) -> Result<Self, Self::Error> {
+//!           match value {
+//!               "fn1" => Ok(Self::fn1),
+//!               "fn2" => Ok(Self::fn2),
+//!               "fn3" => Ok(Self::fn3),
+//!               _ => Err("Input str does not match any enums in Self!"),
+//!           }
+//!       }
+//!   }
+//!   impl From<Tester1_invoke_impl_enum> for &str {
+//!       fn from(en: Tester1_invoke_impl_enum) -> Self {
+//!           use Tester1_invoke_impl_enum::*;
+//!           match en {
+//!               fn1 => "fn1",
+//!               fn2 => "fn2",
+//!               fn3 => "fn3",
+//!           }
+//!       }
+//!   }
+///```
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use syn::FnArg::Typed;
