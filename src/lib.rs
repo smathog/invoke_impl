@@ -49,13 +49,13 @@ pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
     let struct_ident = get_struct_identifier_as_path(&input).unwrap();
 
     // Generate enum
-    let enum_tokenstream = create_enum(&methods, struct_ident.clone());
+    let enum_tokenstream = create_enum(&methods, &struct_ident, &name);
 
     // Generate invoke_all function to impl block:
     let invoke_all = create_invoke_function(
         methods[0],
         &methods,
-        struct_ident.clone(),
+        &struct_ident,
         InvokeType::All,
         &name,
         &clones,
@@ -65,7 +65,7 @@ pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
     let invoke_subset = create_invoke_function(
         methods[0],
         &methods,
-        struct_ident.clone(),
+        &struct_ident,
         InvokeType::Subset,
         &name,
         &clones,
@@ -75,7 +75,7 @@ pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
     let invoke_all_enumerated = create_invoke_function(
         methods[0],
         &methods,
-        struct_ident.clone(),
+        &struct_ident,
         InvokeType::SpecifiedAll(SpecificationType::Enumerated),
         &name,
         &clones,
@@ -85,7 +85,7 @@ pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
     let invoke_all_enum = create_invoke_function(
         methods[0],
         &methods,
-        struct_ident.clone(),
+        &struct_ident,
         InvokeType::SpecifiedAll(SpecificationType::Enum),
         &name,
         &clones,
@@ -95,7 +95,7 @@ pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
     let invoke_enumerated = create_invoke_function(
         methods[0],
         &methods,
-        struct_ident.clone(),
+        &struct_ident,
         InvokeType::Specified(SpecificationType::Enumerated),
         &name,
         &clones,
@@ -105,7 +105,7 @@ pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
     let invoke_enum = create_invoke_function(
         methods[0],
         &methods,
-        struct_ident.clone(),
+        &struct_ident,
         InvokeType::Specified(SpecificationType::Enum),
         &name,
         &clones,
@@ -119,13 +119,23 @@ pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
     input.items.push(invoke_enum);
 
     // Append the number of functions (excluding those added by macro) to the impl block:
+    let mc_ident = if let Some(ref s) = name {
+        format_ident!("METHOD_COUNT_{}", s)
+    } else {
+        format_ident!("METHOD_COUNT")
+    };
     input
         .items
-        .push(syn::parse(quote!(pub const METHOD_COUNT: usize = #count;).into()).unwrap());
+        .push(syn::parse(quote!(pub const #mc_ident: usize = #count;).into()).unwrap());
 
     // Append an array containing all function identifiers into the tokenstream
+    let ml_ident = if let Some(ref s) = name {
+        format_ident!("METHOD_LIST_{}", s)
+    } else {
+        format_ident!("METHOD_LIST")
+    };
     input.items.push(
-        syn::parse(quote!(pub const METHOD_LIST: [&'static str; #count] = [#(#names),*];).into())
+        syn::parse(quote!(pub const #ml_ident: [&'static str; #count] = [#(#names),*];).into())
             .unwrap(),
     );
 
@@ -177,7 +187,7 @@ enum InvokeType {
 fn create_invoke_function(
     base_method: &ImplItemMethod,
     methods: &Vec<&ImplItemMethod>,
-    struct_ident: Ident,
+    struct_ident: &Ident,
     invoke_type: InvokeType,
     name: &Option<String>,
     clone: &Option<HashSet<usize>>,
@@ -189,7 +199,7 @@ fn create_invoke_function(
     let invoke_name = generate_invoke_name(name, invoke_type);
 
     // Generate Ident corresponding to enum name, in case this exists:
-    let enum_name = format_ident!("{}_invoke_impl_enum", struct_ident);
+    let enum_name = generate_enum_name(struct_ident, name);
 
     // Set up the signature for the invoke function being constructed.
     let mut invoke_sig = Signature {
@@ -329,6 +339,7 @@ fn create_invoke_function(
             methods,
             &closure_ident,
             &struct_ident,
+            name,
             &generic_params,
             &param_ids,
         ),
@@ -339,6 +350,7 @@ fn create_invoke_function(
             methods,
             &closure_ident,
             &struct_ident,
+            name,
             &generic_params,
             &param_ids,
         ),
@@ -484,6 +496,7 @@ fn invoke_all_enum_block(
     methods: &Vec<&ImplItemMethod>,
     closure_ident: &Ident,
     struct_ident: &Ident,
+    name: &Option<String>,
     generic_params: &Vec<Ident>,
     param_ids: &Vec<Expr>,
 ) -> Block {
@@ -494,7 +507,7 @@ fn invoke_all_enum_block(
     };
 
     // Generate enum name
-    let enum_name = format_ident!("{}_invoke_impl_enum", struct_ident);
+    let enum_name = generate_enum_name(struct_ident, name);
 
     // Generate list of idents that enum has:
     let identifiers = methods
@@ -556,6 +569,7 @@ fn invoke_enum_block(
     methods: &Vec<&ImplItemMethod>,
     closure_ident: &Ident,
     struct_ident: &Ident,
+    name: &Option<String>,
     generic_params: &Vec<Ident>,
     param_ids: &Vec<Expr>,
 ) -> Block {
@@ -566,7 +580,7 @@ fn invoke_enum_block(
     };
 
     // Generate enum name
-    let enum_name = format_ident!("{}_invoke_impl_enum", struct_ident);
+    let enum_name = generate_enum_name(struct_ident, name);
 
     // Generate list of idents that enum has:
     let identifiers = methods
@@ -692,7 +706,7 @@ fn get_inner_call_expr(
 /// represent them. Namely, if methods = [fn1, fn2, fn3, ... fnm] and struct_ident = struct_name,
 /// then this will create an enum with members fn1, fn2, fn3, ... fnm. The created enum will
 /// implement Debug, Clone, Copy, and TryFrom<&str>. &str will implement From<enum_name>.
-fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: Ident) -> TokenStream {
+fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: &Ident, name: &Option<String>) -> TokenStream {
     // Get list of identifiers from methods
     let identifiers = methods
         .into_iter()
@@ -708,7 +722,7 @@ fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: Ident) -> TokenStre
     let num_members = identifiers.len();
 
     // Generate enum name
-    let enum_name = format_ident!("{}_invoke_impl_enum", struct_ident);
+    let enum_name = generate_enum_name(struct_ident, name);
 
     let enum_declaration: ItemEnum = syn::parse(
         quote!(#[derive(Debug, Clone, Copy)]
@@ -932,6 +946,15 @@ fn generate_invoke_name(name: &Option<String>, invoke_type: InvokeType) -> Ident
         format_ident!("{}_{}", base_string, name_s)
     } else {
         format_ident!("{}", base_string)
+    }
+}
+
+/// Helper function to generate the name of the associated enum
+fn generate_enum_name(struct_ident: &Ident, name: &Option<String>) -> Ident {
+    if let Some(n) = name {
+        format_ident!("{}_invoke_impl_enum_{}", struct_ident, n)
+    } else {
+        format_ident!("{}_invoke_impl_enum", struct_ident)
     }
 }
 
