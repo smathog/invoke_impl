@@ -1,12 +1,15 @@
 use proc_macro::TokenStream;
-use std::cmp::max;
 use quote::{format_ident, quote, ToTokens};
 use syn::FnArg::Typed;
 use syn::__private::Span;
 use syn::__private::{str, Default};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{parse_macro_input, Block, Expr, ExprCall, ExprMatch, ExprPath, FnArg, GenericParam, Ident, ImplItem, ImplItemMethod, ItemEnum, ItemImpl, Lit, MetaList, NestedMeta, Pat, ReturnType, Signature, Stmt, Type, ExprForLoop};
+use syn::{
+    parse_macro_input, Block, Expr, ExprCall, ExprForLoop, ExprMatch, ExprPath, FnArg,
+    GenericParam, Ident, ImplItem, ImplItemMethod, ItemEnum, ItemImpl, Lit, MetaList, NestedMeta,
+    Pat, ReturnType, Signature, Stmt, Type,
+};
 
 use std::collections::HashSet;
 
@@ -68,8 +71,30 @@ pub fn invoke_all(args: TokenStream, item: TokenStream) -> TokenStream {
         &clones,
     );
 
+    // Generate invoke_all_enumerated function to impl block:
+    let invoke_all_enumerated= create_invoke_function(
+        methods[0],
+        &methods,
+        struct_ident.clone(),
+        InvokeType::SpecifiedAll(SpecificationType::Enumerated),
+        &name,
+        &clones,
+    );
+
+    // Generate invoke_all_enumerated function to impl block:
+    let invoke_all_enum= create_invoke_function(
+        methods[0],
+        &methods,
+        struct_ident.clone(),
+        InvokeType::SpecifiedAll(SpecificationType::Enum),
+        &name,
+        &clones,
+    );
+
     input.items.push(invoke_all);
     input.items.push(invoke_subset);
+    input.items.push(invoke_all_enumerated);
+    input.items.push(invoke_all_enum);
 
     // Append the number of functions (excluding those added by macro) to the impl block:
     input
@@ -252,16 +277,17 @@ fn create_invoke_function(
     // If relevant, append parameter specifying which functions to call:
     let specifier = match invoke_type {
         InvokeType::Specified(st) => match st {
-            SpecificationType::Enum => {
-                Some(syn::parse(quote!(mut invoke_impl_iter: impl Iterator<Item=#enum_name>).into()).unwrap())
-            }
-            SpecificationType::Enumerated => {
-                Some(syn::parse(quote!(mut invoke_impl_iter: impl Iterator<Item=usize>).into()).unwrap())
-            }
+            SpecificationType::Enum => Some(
+                syn::parse(quote!(mut invoke_impl_iter: impl Iterator<Item=#enum_name>).into())
+                    .unwrap(),
+            ),
+            SpecificationType::Enumerated => Some(
+                syn::parse(quote!(mut invoke_impl_iter: impl Iterator<Item=usize>).into()).unwrap(),
+            ),
         },
-        InvokeType::Subset => {
-            Some(syn::parse(quote!(mut invoke_impl_iter: impl Iterator<Item=usize>).into()).unwrap())
-        }
+        InvokeType::Subset => Some(
+            syn::parse(quote!(mut invoke_impl_iter: impl Iterator<Item=usize>).into()).unwrap(),
+        ),
         InvokeType::All | InvokeType::SpecifiedAll(_) => None,
     };
     if let Some(fnarg) = specifier {
@@ -275,7 +301,16 @@ fn create_invoke_function(
     // Attach correct body block to correct function signature:
     let invoke_block = match invoke_type {
         InvokeType::Specified(_) => todo!(),
-        InvokeType::SpecifiedAll(_) => todo!(),
+        InvokeType::SpecifiedAll(st) => invoke_all_enum_block(
+            is_method,
+            st,
+            &output_type,
+            methods,
+            &closure_ident,
+            &struct_ident,
+            &generic_params,
+            &param_ids,
+        ),
         InvokeType::Subset => invoke_some_block(
             is_method,
             &output_type,
@@ -373,8 +408,10 @@ fn invoke_some_block(
             get_inner_call_expr(is_method, method, struct_ident, generic_params, param_ids);
 
         // Convert/merge to outer call
-        let outer_call = if output_type != &generate_trailing_return_type() && output_type != &ReturnType::Default {
-            // Functions have return type, so the invoke_all function accepts a closure
+        let outer_call = if output_type != &generate_trailing_return_type()
+            && output_type != &ReturnType::Default
+        {
+            // Functions have return type, so the invoke_subset function accepts a closure
             // Insert previous call into a call of consumer:
             syn::parse(quote!(#closure_ident(#inner_call)).into()).unwrap()
         } else {
@@ -383,22 +420,24 @@ fn invoke_some_block(
         };
 
         // Parse to match arm
-        match_statement.arms.push(
-            syn::parse(quote!(#index => #outer_call,).into()).unwrap()
-        );
+        match_statement
+            .arms
+            .push(syn::parse(quote!(#index => #outer_call,).into()).unwrap());
     }
 
     // Add default case to match statement
     match_statement.arms.push(
-        syn::parse(quote!(_ => panic!("Iter contains invalid function index!")).into()).unwrap()
+        syn::parse(quote!(_ => panic!("Iter contains invalid function index!")).into()).unwrap(),
     );
 
     // Wrap match in loop
     let loopexpr: ExprForLoop = syn::parse(
         quote!(for invoke_impl_i in invoke_impl_iter {
             #match_statement
-        }).into()
-    ).unwrap();
+        })
+        .into(),
+    )
+    .unwrap();
 
     // Add loop to block
     invoke_block.stmts.push(Stmt::Expr(Expr::ForLoop(loopexpr)));
@@ -422,6 +461,55 @@ fn invoke_all_enum_block(
         brace_token: Default::default(),
         stmts: vec![],
     };
+
+    // Generate enum name
+    let enum_name = format_ident!("{}_invoke_impl_enum", struct_ident);
+
+    // Generate list of idents that enum has:
+    let identifiers = methods
+        .into_iter()
+        .map(|im| im.sig.ident.clone())
+        .collect::<Vec<_>>();
+
+    for (index, (enum_ident, &method)) in
+        identifiers.into_iter().zip(methods.into_iter()).enumerate()
+    {
+        // Get inner call
+        let inner_call =
+            get_inner_call_expr(is_method, method, struct_ident, generic_params, param_ids);
+
+        // Convert/merge to outer call
+        let outer_call = if output_type != &generate_trailing_return_type()
+            && output_type != &ReturnType::Default
+        {
+            // Functions have return type, so the invoke function accepts a closure with returntype
+            // Insert previous call into a call of consumer:
+            match specification_type {
+                SpecificationType::Enum => {
+                    syn::parse(quote!(#closure_ident(#enum_name::#enum_ident, #inner_call)).into())
+                        .unwrap()
+                }
+                SpecificationType::Enumerated => {
+                    syn::parse(quote!(#closure_ident(#index, #inner_call)).into()).unwrap()
+                }
+            }
+        } else {
+            // Closure takes iteration type
+            match specification_type {
+                SpecificationType::Enum => {
+                    syn::parse(quote!(#closure_ident(#enum_name::#enum_ident)).into()).unwrap()
+                }
+                SpecificationType::Enumerated => {
+                    syn::parse(quote!(#closure_ident(#index)).into()).unwrap()
+                }
+            }
+        };
+
+        // Add outer call to block
+        invoke_block
+            .stmts
+            .push(Stmt::Semi(Expr::Call(outer_call), Default::default()));
+    }
 
     invoke_block
 }
