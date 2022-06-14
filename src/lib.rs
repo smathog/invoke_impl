@@ -917,7 +917,9 @@ fn create_enum(methods: &Vec<&ImplItemMethod>, struct_ident: &Ident, name: &Opti
     let enum_name = generate_enum_name(struct_ident, name);
 
     let enum_declaration: ItemEnum = syn::parse(
-        quote!(#[derive(Debug, Clone, Copy)]
+        quote!(
+            #[allow(non_camel_case_types)]
+            #[derive(Debug, Clone, Copy)]
             pub enum #enum_name {
             #(#identifiers),*
         })
