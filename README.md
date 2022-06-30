@@ -6,7 +6,7 @@ invoke_impl is a Rust lib crate built around an attribute procedural macro that,
 
 Suppose we have the following Rust struct and associated impl block:
 
-```Rust
+```rust
     struct Tester1;
 
     #[invoke_impl]
@@ -27,7 +27,7 @@ Suppose we have the following Rust struct and associated impl block:
 
 As it currently works, when the #[invoke_impl] attribute proc macro is applied to the impl block for Tester1, the following code is produced before compilation (and can be viewed with the cargo expand command):
 
-```Rust
+```rust
     struct Tester1;
     impl Tester1 {
         pub fn fn1(i: i32) -> i32 {
@@ -152,7 +152,7 @@ As is demonstrated, the invoke functions added to impl blocks process the output
 
 The invoke_impl attribute can also take two user-specified arguments. The name argument must be a string literal, provided as #[invoke_impl(name("MY_NAME"))]. When this is used, the name argument is appended to provide different identifiers for all the generated code: 
 
-```Rust
+```rust
     struct Tester1;
 
     #[invoke_impl(name("MY_NAME"))]
@@ -173,7 +173,7 @@ The invoke_impl attribute can also take two user-specified arguments. The name a
 
 becomes
 
-```Rust
+```rust
     struct Tester1;
     impl Tester1 {
         pub fn fn1(i: i32) -> i32 {
@@ -297,7 +297,7 @@ becomes
 
 The other argument that invoke_impl can take is the clone argument. Since procedural macros can more or less only work over tokens, the invoke_impl macro cannot tell when an argument that it forwards from an invoke function into an associated function or method call is a move-only type. Therefore, the parameter identifiers are simply copy-pasted into the associated calls. This works fine for types that are copy like usize, or can sometimes implicitly reborrow like &mut (something), but fails for something like String which is move-only. To handle this case, there are two primary options: either make the associated functions/methods in the impl block take their arguments as copy types (namely references), or clone the input for each call. The clone argument is the latter approach. The argument takes a comma-separated list of integer literals indicating which parameters (0-indexed) of the associated functions should be cloned before each call. 
 
-```Rust
+```rust
     struct Tester1;
 
     #[invoke_impl(clone(1))]
@@ -318,7 +318,7 @@ The other argument that invoke_impl can take is the clone argument. Since proced
 
 becomes 
 
-```Rust
+```rust
     struct Tester1;
     impl Tester1 {
         pub fn fn1(i: i32, s: String) -> i32 {
@@ -451,7 +451,7 @@ The main use case for this crate is obvious: when a user wishes to invoke a larg
 
 In contrast, when using this approach, functions are automatically added to invoke functions and associated consts when implemented in the impl block. Furthermore, if the functions in the impl block are generic, so to will be the invoke functions generated:
 
-```Rust
+```rust
     struct Tester4;
 
     #[invoke_impl]
@@ -472,7 +472,7 @@ In contrast, when using this approach, functions are automatically added to invo
 
 becomes 
 
-```Rust
+```rust
     struct Tester4;
     impl Tester4 {
         pub fn fn1<T: Add + Copy>(i: T, j: T) -> <T as Add>::Output {
@@ -498,7 +498,7 @@ Altogether, this approach seems to be much more easily maintained (when things g
 
 Note that when there are generic type parameters, the turbofish syntax is automatically applied. This is less important in examples like the one above where T is deducible by looking at the field passed to the function, but it is important in cases like the one below: 
 
-```Rust
+```rust
     struct Tester5;
 
     #[invoke_impl]
@@ -519,7 +519,7 @@ Note that when there are generic type parameters, the turbofish syntax is automa
 
 Since C cannot be inferred from the argument the function receives, the implementation of of an invoke function such as invoke_all must (and does) use the turbofish to specify the type of C for each call:
 
-```Rust
+```rust
         pub fn invoke_all<C: FromIterator<usize>>(i: &Vec<usize>, mut consumer: impl FnMut(C)) {
             consumer(Tester5::fn1::<C>(i));
             consumer(Tester5::fn2::<C>(i));
